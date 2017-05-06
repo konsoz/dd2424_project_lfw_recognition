@@ -3,6 +3,10 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+face/
+.idea/
+Thumbs.db
+data/
 # C extensions
 *.so
 
