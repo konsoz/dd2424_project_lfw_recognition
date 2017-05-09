@@ -7,6 +7,13 @@ face/
 .idea/
 Thumbs.db
 data/
+ConvNet-master/
+BACKUP/
+ckpt_dir/
+old/
+small_dataset/
+test_dataset/
+*.pkl*
 # C extensions
 *.so
 
