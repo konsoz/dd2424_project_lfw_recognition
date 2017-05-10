@@ -20,7 +20,6 @@ MODEL_CKPT = 'ckpt_dir/model.cktp'
 BATCH_SIZE = 32
 
 ### Network Parameters ###
-n_input = IMG_SIZE ** 2
 n_channels = 3
 dropout = 0.8  # Dropout, probability to keep units
 
@@ -40,6 +39,33 @@ tf.app.flags.DEFINE_string('data_dir', 'data',
                            """Path to the data directory.""")
 tf.app.flags.DEFINE_boolean('use_fp16', False,
                             """Train the model using fp16.""")
+
+
+def _add_loss_summaries(total_loss):
+  """Add summaries for losses in CIFAR-10 model.
+
+  Generates moving average for all losses and associated summaries for
+  visualizing the performance of the network.
+
+  Args:
+    total_loss: Total loss from loss().
+  Returns:
+    loss_averages_op: op for generating moving averages of losses.
+  """
+  # Compute the moving average of all individual losses and the total loss.
+  loss_averages = tf.train.ExponentialMovingAverage(0.9, name='avg')
+  losses = tf.get_collection('losses')
+  loss_averages_op = loss_averages.apply(losses + [total_loss])
+
+  # Attach a scalar summary to all individual losses and the total loss; do the
+  # same for the averaged version of the losses.
+  for l in losses + [total_loss]:
+    # Name each loss as '(raw)' and name the moving average version of the loss
+    # as the original loss name.
+    tf.summary.scalar(l.op.name + ' (raw)', l)
+    tf.summary.scalar(l.op.name, loss_averages.average(l))
+
+  return loss_averages_op
 
 
 def _activation_summary(x):
@@ -148,6 +174,16 @@ class ConvNet(object):
         if len(imgs) > 0:
             yield imgs, labels
 
+    def ALLIterator(self, imbs_lab):
+        imgs = []
+        labels = []
+
+        for img, label in imbs_lab:
+            imgs.append(img)
+            labels.append(label)
+
+        yield imgs, labels
+
     """
     Create AlexNet model
     """
@@ -162,25 +198,108 @@ class ConvNet(object):
     def norm(self, name, l_input, lsize):
         return tf.nn.lrn(l_input, lsize, bias=1.0, alpha=2e-05, beta=0.75, name=name)
 
-    def simple_model(self, _images_u8, _dropout):
+    #Two convolution and pooling layers. Two fully connected layers
+    def noLNorm_model(self, _images_u8, _dropout):
 
-        #Reshape input image batch
+        # Reshape input image batch
         img_padded_or_cropped = tf.image.resize_images(_images_u8, [RE_IMG_SIZE, RE_IMG_SIZE])
         _images_f32 = tf.image.convert_image_dtype(img_padded_or_cropped, tf.float32)
 
         _X = tf.reshape(_images_f32, shape=[-1, RE_IMG_SIZE, RE_IMG_SIZE, 3])
 
-
-        #Batch normalization on images, TODO add fc layer after this?
-        #b_norm = tf.contrib.layers.batch_norm(_X, center=True, scale=True, is_training=True, scope='bn')
+        # Batch normalization on images, TODO add fc layer after this?
+        # b_norm = tf.contrib.layers.batch_norm(_X, center=True, scale=True, is_training=True, scope='bn')
 
         # Convolution Layer 1
         with tf.variable_scope('conv1') as scope:
-            #wc1 = tf.Variable(tf.random_normal([5, 5, n_channels, 64], stddev=self.std_dev))
-            wc1 = _variable_with_weight_decay('weights',shape=[5, 5, 3, 16], stddev=5e-2, wd=0.0)
-            #bc1 = tf.Variable(tf.random_normal([64]))
+            # wc1 = tf.Variable(tf.random_normal([5, 5, n_channels, 64], stddev=self.std_dev))
+            wc1 = _variable_with_weight_decay('weights', shape=[5, 5, 3, 16], stddev=5e-2, wd=0.0)
+            # bc1 = tf.Variable(tf.random_normal([64]))
             bc1 = _variable_on_cpu('biases', [16], tf.constant_initializer(0.0))
             conv1 = self.conv2d(scope.name, _X, wc1, bc1, s=1)
+            _activation_summary(conv1)
+            print("conv1.shape: ", conv1.get_shape())
+
+        # Max Pooling (down-sampling)
+        pool1 = self.max_pool('pool1', conv1, k=3, s=2)
+        print("pool1.shape:", pool1.get_shape())
+
+        # Convolution Layer 2
+        with tf.variable_scope('conv2') as scope:
+            # wc2 = tf.Variable(tf.random_normal([5, 5, 64, 64], stddev=self.std_dev))
+            wc2 = _variable_with_weight_decay('weights', shape=[5, 5, 16, 16], stddev=5e-2, wd=0.0)
+            # bc2 = tf.Variable(tf.random_normal([64]))
+            bc2 = _variable_on_cpu('biases', [16], tf.constant_initializer(0.1))
+            conv2 = self.conv2d(scope.name, pool1, wc2, bc2, s=1)
+            _activation_summary(conv2)
+            print("conv2.shape:", conv2.get_shape())
+
+
+        # Max Pooling (down-sampling)
+        pool2 = self.max_pool('pool2', conv2, k=3, s=2)
+        print("pool5.shape:", pool2.get_shape())
+
+        # Fully connected layer 1
+        with tf.variable_scope('fc1') as scope:
+            pool2_shape = pool2.get_shape().as_list()
+            dim = pool2_shape[1] * pool2_shape[2] * pool2_shape[3]
+            reshape = tf.reshape(pool2, [-1, dim])
+
+            # wd = tf.Variable(tf.random_normal([dim2, 384]))
+            wd = _variable_with_weight_decay('weights', shape=[dim, 384], stddev=0.04, wd=0.004)
+            # bd = tf.Variable(tf.random_normal([384]))
+            bd = _variable_on_cpu('biases', [384], tf.constant_initializer(0.1))
+            fc1 = tf.nn.relu(tf.matmul(reshape, wd) + bd, name=scope.name)  # Relu activation
+            _activation_summary(fc1)
+            print("reshape.shape:", reshape.get_shape())
+            print("fc1.shape:", fc1.get_shape())
+
+        # Fully connected layer 2
+        with tf.variable_scope('fc2') as scope:
+            # wfc = tf.Variable(tf.random_normal([384, 192], stddev=self.std_dev))
+            wfc = _variable_with_weight_decay('weights', shape=[384, 192], stddev=0.04, wd=0.004)
+            # bfc = tf.Variable(tf.random_normal([192]))
+            bfc = _variable_on_cpu('biases', [192], tf.constant_initializer(0.1))
+            fc2 = tf.nn.relu(tf.matmul(fc1, wfc) + bfc, name=scope.name)  # Relu activation
+            _activation_summary(fc2)
+            print("fc2.shape:", fc2.get_shape())
+
+        # Output, class prediction LOGITS
+        with tf.variable_scope('logits') as scope:
+            # wout = tf.Variable(tf.random_normal([192, Dataset.NUM_LABELS], stddev=self.std_dev))
+            wout = _variable_with_weight_decay('weights', [192, Dataset.NUM_LABELS], stddev=1 / 192.0, wd=0.0)
+            # bout = tf.Variable(tf.random_normal([Dataset.NUM_LABELS]))
+            bout = _variable_on_cpu('biases', [Dataset.NUM_LABELS], tf.constant_initializer(0.0))
+            out = tf.matmul(fc2, wout) + bout
+            _activation_summary(out)
+
+        # Create a saver for writing training checkpoints.
+        self.saver = tf.train.Saver()
+
+        # The function returns the Logits to be passed to softmax and the Softmax for the PREDICTION
+        return out
+
+
+    #One convolution, local normalization and pooling layers. Two fully connected layers
+    def noConv2_model(self, _images_u8, _dropout):
+
+        # Reshape input image batch
+        img_padded_or_cropped = tf.image.resize_images(_images_u8, [RE_IMG_SIZE, RE_IMG_SIZE])
+        _images_f32 = tf.image.convert_image_dtype(img_padded_or_cropped, tf.float32)
+
+        _X = tf.reshape(_images_f32, shape=[-1, RE_IMG_SIZE, RE_IMG_SIZE, 3])
+
+        # Batch normalization on images, TODO add fc layer after this?
+        # b_norm = tf.contrib.layers.batch_norm(_X, center=True, scale=True, is_training=True, scope='bn')
+
+        # Convolution Layer 1
+        with tf.variable_scope('conv1') as scope:
+            # wc1 = tf.Variable(tf.random_normal([5, 5, n_channels, 64], stddev=self.std_dev))
+            wc1 = _variable_with_weight_decay('weights', shape=[5, 5, 3, 16], stddev=5e-2, wd=0.0)
+            # bc1 = tf.Variable(tf.random_normal([64]))
+            bc1 = _variable_on_cpu('biases', [16], tf.constant_initializer(0.0))
+            conv1 = self.conv2d(scope.name, _X, wc1, bc1, s=1)
+            _activation_summary(conv1)
             print("conv1.shape: ", conv1.get_shape())
 
         # Max Pooling (down-sampling)
@@ -192,13 +311,83 @@ class ConvNet(object):
         print("norm1.shape:", norm1.get_shape())
 
 
+        # Fully connected layer 1
+        with tf.variable_scope('fc1') as scope:
+            norm1_shape = norm1.get_shape().as_list()
+            dim = norm1_shape[1] * norm1_shape[2] * norm1_shape[3]
+            reshape = tf.reshape(norm1, [-1, dim])
+
+            # wd = tf.Variable(tf.random_normal([dim2, 384]))
+            wd = _variable_with_weight_decay('weights', shape=[dim, 384], stddev=0.04, wd=0.004)
+            # bd = tf.Variable(tf.random_normal([384]))
+            bd = _variable_on_cpu('biases', [384], tf.constant_initializer(0.1))
+            fc1 = tf.nn.relu(tf.matmul(reshape, wd) + bd, name=scope.name)  # Relu activation
+            _activation_summary(fc1)
+            print("reshape.shape:", reshape.get_shape())
+            print("fc1.shape:", fc1.get_shape())
+
+        # Fully connected layer 2
+        with tf.variable_scope('fc2') as scope:
+            # wfc = tf.Variable(tf.random_normal([384, 192], stddev=self.std_dev))
+            wfc = _variable_with_weight_decay('weights', shape=[384, 192], stddev=0.04, wd=0.004)
+            # bfc = tf.Variable(tf.random_normal([192]))
+            bfc = _variable_on_cpu('biases', [192], tf.constant_initializer(0.1))
+            fc2 = tf.nn.relu(tf.matmul(fc1, wfc) + bfc, name=scope.name)  # Relu activation
+            _activation_summary(fc2)
+            print("fc2.shape:", fc2.get_shape())
+
+        # Output, class prediction LOGITS
+        with tf.variable_scope('logits') as scope:
+            # wout = tf.Variable(tf.random_normal([192, Dataset.NUM_LABELS], stddev=self.std_dev))
+            wout = _variable_with_weight_decay('weights', [192, Dataset.NUM_LABELS], stddev=1 / 192.0, wd=0.0)
+            # bout = tf.Variable(tf.random_normal([Dataset.NUM_LABELS]))
+            bout = _variable_on_cpu('biases', [Dataset.NUM_LABELS], tf.constant_initializer(0.0))
+            out = tf.matmul(fc2, wout) + bout
+            _activation_summary(out)
+
+        # Create a saver for writing training checkpoints.
+        self.saver = tf.train.Saver()
+
+        # The function returns the Logits to be passed to softmax and the Softmax for the PREDICTION
+        return out
+
+    def baseline_model(self, _images_u8, _dropout):
+
+        # Reshape input image batch
+        img_padded_or_cropped = tf.image.resize_images(_images_u8, [RE_IMG_SIZE, RE_IMG_SIZE])
+        _images_f32 = tf.image.convert_image_dtype(img_padded_or_cropped, tf.float32)
+
+        _X = tf.reshape(_images_f32, shape=[-1, RE_IMG_SIZE, RE_IMG_SIZE, 3])
+
+        # Batch normalization on images, TODO add fc layer after this?
+        # b_norm = tf.contrib.layers.batch_norm(_X, center=True, scale=True, is_training=True, scope='bn')
+
+        # Convolution Layer 1
+        with tf.variable_scope('conv1') as scope:
+            # wc1 = tf.Variable(tf.random_normal([5, 5, n_channels, 64], stddev=self.std_dev))
+            wc1 = _variable_with_weight_decay('weights', shape=[5, 5, 3, 16], stddev=5e-2, wd=0.0)
+            # bc1 = tf.Variable(tf.random_normal([64]))
+            bc1 = _variable_on_cpu('biases', [16], tf.constant_initializer(0.0))
+            conv1 = self.conv2d(scope.name, _X, wc1, bc1, s=1)
+            _activation_summary(conv1)
+            print("conv1.shape: ", conv1.get_shape())
+
+        # Max Pooling (down-sampling)
+        pool1 = self.max_pool('pool1', conv1, k=3, s=2)
+        print("pool1.shape:", pool1.get_shape())
+
+        # Apply Normalization
+        norm1 = self.norm('norm1', pool1, lsize=4)
+        print("norm1.shape:", norm1.get_shape())
+
         # Convolution Layer 2
         with tf.variable_scope('conv2') as scope:
-            #wc2 = tf.Variable(tf.random_normal([5, 5, 64, 64], stddev=self.std_dev))
+            # wc2 = tf.Variable(tf.random_normal([5, 5, 64, 64], stddev=self.std_dev))
             wc2 = _variable_with_weight_decay('weights', shape=[5, 5, 16, 16], stddev=5e-2, wd=0.0)
-            #bc2 = tf.Variable(tf.random_normal([64]))
+            # bc2 = tf.Variable(tf.random_normal([64]))
             bc2 = _variable_on_cpu('biases', [16], tf.constant_initializer(0.1))
             conv2 = self.conv2d(scope.name, norm1, wc2, bc2, s=1)
+            _activation_summary(conv2)
             print("conv2.shape:", conv2.get_shape())
 
         # Apply Normalization
@@ -209,38 +398,39 @@ class ConvNet(object):
         pool2 = self.max_pool('pool2', norm2, k=3, s=2)
         print("pool5.shape:", pool2.get_shape())
 
-
         # Fully connected layer 1
         with tf.variable_scope('fc1') as scope:
             pool2_shape = pool2.get_shape().as_list()
             dim = pool2_shape[1] * pool2_shape[2] * pool2_shape[3]
             reshape = tf.reshape(pool2, [-1, dim])
 
-            #wd = tf.Variable(tf.random_normal([dim2, 384]))
+            # wd = tf.Variable(tf.random_normal([dim2, 384]))
             wd = _variable_with_weight_decay('weights', shape=[dim, 384], stddev=0.04, wd=0.004)
-            #bd = tf.Variable(tf.random_normal([384]))
+            # bd = tf.Variable(tf.random_normal([384]))
             bd = _variable_on_cpu('biases', [384], tf.constant_initializer(0.1))
             fc1 = tf.nn.relu(tf.matmul(reshape, wd) + bd, name=scope.name)  # Relu activation
+            _activation_summary(fc1)
             print("reshape.shape:", reshape.get_shape())
             print("fc1.shape:", fc1.get_shape())
 
         # Fully connected layer 2
         with tf.variable_scope('fc2') as scope:
-            wfc = tf.Variable(tf.random_normal([384, 192], stddev=self.std_dev))
+            # wfc = tf.Variable(tf.random_normal([384, 192], stddev=self.std_dev))
             wfc = _variable_with_weight_decay('weights', shape=[384, 192], stddev=0.04, wd=0.004)
-            #bfc = tf.Variable(tf.random_normal([192]))
+            # bfc = tf.Variable(tf.random_normal([192]))
             bfc = _variable_on_cpu('biases', [192], tf.constant_initializer(0.1))
             fc2 = tf.nn.relu(tf.matmul(fc1, wfc) + bfc, name=scope.name)  # Relu activation
+            _activation_summary(fc2)
             print("fc2.shape:", fc2.get_shape())
 
         # Output, class prediction LOGITS
         with tf.variable_scope('logits') as scope:
-            #wout = tf.Variable(tf.random_normal([192, Dataset.NUM_LABELS], stddev=self.std_dev))
+            # wout = tf.Variable(tf.random_normal([192, Dataset.NUM_LABELS], stddev=self.std_dev))
             wout = _variable_with_weight_decay('weights', [192, Dataset.NUM_LABELS], stddev=1 / 192.0, wd=0.0)
-            #bout = tf.Variable(tf.random_normal([Dataset.NUM_LABELS]))
+            # bout = tf.Variable(tf.random_normal([Dataset.NUM_LABELS]))
             bout = _variable_on_cpu('biases', [Dataset.NUM_LABELS], tf.constant_initializer(0.0))
             out = tf.matmul(fc2, wout) + bout
-
+            _activation_summary(out)
 
         # Create a saver for writing training checkpoints.
         self.saver = tf.train.Saver()
@@ -257,15 +447,17 @@ class ConvNet(object):
             ############################# Construct model: prepare logits, loss and optimizer #############################
 
             # logits: unnormalized log probabilities
-            logits = self.simple_model(self.img_pl, self.keep_prob)
+            #logits = self.noLNorm_model(self.img_pl, self.keep_prob)
+            logits = self.noConv2_model(self.img_pl, self.keep_prob)
+            #logits = self.baseline_model(self.img_pl, self.keep_prob)
 
             # loss: cross-entropy between the target and the softmax activation function applied to the model's prediction
             loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=logits, labels=self.label_pl))
             tf.summary.scalar("cross-entropy_for_loss", loss)
             # optimizer: find the best gradients of the loss with respect to each of the variables
             train_step = tf.train.AdamOptimizer(learning_rate=self.learning_rate, epsilon=0.1).minimize(loss)
-
             print(logits.get_shape(), self.label_pl.get_shape())
+
 
             ######## Evaluate model: the degree to which the result of the prediction conforms to the correct value ########
 
@@ -279,12 +471,19 @@ class ConvNet(object):
             init = tf.global_variables_initializer()
             # Run the Op to initialize the variables.
             sess.run(init)
-            summary_writer = tf.summary.FileWriter(CKPT_DIR, graph=sess.graph)
+            #summary_writer = tf.summary.FileWriter(CKPT_DIR, graph=sess.graph)
+            # Merge all the summaries and write them out
+            merged = tf.summary.merge_all()
+            train_writer = tf.summary.FileWriter(CKPT_DIR + '/train',
+                                                 sess.graph)
+            valid_writer = tf.summary.FileWriter(CKPT_DIR + '/valid')
+            test_writer = tf.summary.FileWriter(CKPT_DIR + '/test')
 
             ##################################### Training the model ################################################
 
-            # collect imgs for validation
-            validation_imgs_batch = [b for i, b in enumerate(self.BatchIterator(self.valid_imgs_lab, BATCH_SIZE))]
+
+            self.train_imgs_lab = Dataset.loadDataset(self.dataset_train)
+            num_batches = sum(1 for x in self.train_imgs_lab)/BATCH_SIZE
 
             # Run for epoch
             for epoch in range(self.max_epochs):
@@ -294,19 +493,45 @@ class ConvNet(object):
 
                 # Loop over all batches
                 for step, elems in enumerate(self.BatchIterator(self.train_imgs_lab, BATCH_SIZE)):
-                    print("\nstep = %d" % step)
+                    #print("\nstep = %d" % step)
                     log.info('step %s' % step)
                     ### from iterator return batch lists ###
                     batch_imgs_train, batch_labels_train = elems
                     _, train_acc, train_loss = sess.run([train_step, accuracy, loss],
-                                                        feed_dict={self.img_pl: batch_imgs_train,
-                                                                   self.label_pl: batch_labels_train,
-                                                                   self.keep_prob: 1.0})
+                                         feed_dict={self.img_pl: batch_imgs_train,
+                                                    self.label_pl: batch_labels_train,
+                                                    self.keep_prob: 1.0})
+
+                    #train_writer.add_summary(summary, epoch * num_batches + step)
 
                     print("Training Accuracy = " + "{:.5f}".format(train_acc))
                     print("Training Loss = " + "{:.6f}".format(train_loss))
-                    log.info("Training Accuracy = " + "{:.5f}".format(train_acc))
-                    log.info("Training Loss = " + "{:.6f}".format(train_loss))
+                    #log.info("Training Accuracy = " + "{:.5f}".format(train_acc))
+                    #log.info("Training Loss = " + "{:.6f}".format(train_loss))
+
+                y_p = tf.argmax(logits, 1)
+
+                self.train_imgs_lab = Dataset.loadDataset(self.dataset_train)
+                training_imgs_batch = self.ALLIterator(self.train_imgs_lab)
+                for step, elems in enumerate(training_imgs_batch):
+                    batch_imgs_train, batch_labels_train = elems
+                    summary, _, _ = sess.run([merged, accuracy, y_p],
+                                             feed_dict={self.img_pl: batch_imgs_train,
+                                                        self.label_pl: batch_labels_train,
+                                                        self.keep_prob: 1.0})
+
+                    train_writer.add_summary(summary, epoch)
+
+                self.valid_imgs_lab = Dataset.loadDataset(self.dataset_valid)
+                validation_imgs_batch = self.ALLIterator(self.valid_imgs_lab)
+                for step, elems in enumerate(validation_imgs_batch):
+                    batch_imgs_valid, batch_labels_valid = elems
+                    summary, _, _ = sess.run([merged, accuracy, y_p],
+                                             feed_dict={self.img_pl: batch_imgs_valid,
+                                                        self.label_pl: batch_labels_valid,
+                                                        self.keep_prob: 1.0})
+
+                    valid_writer.add_summary(summary, epoch)
 
             print("Optimization Finished!")
 
@@ -315,7 +540,6 @@ class ConvNet(object):
             print("Model saved in file %s" % save_model_ckpt)
 
             ############################################### Metrics ##############################################
-
             y_p = tf.argmax(logits, 1)  # the value predicted
 
             target_names = ['class %d' % i for i in range(Dataset.NUM_LABELS)]
@@ -323,15 +547,21 @@ class ConvNet(object):
             list_true_total = []
 
             # Accuracy Precision Recall F1-score by VALIDATION IMAGES
-            for step, elems in enumerate(validation_imgs_batch):
-                batch_imgs_valid, batch_labels_valid = elems
-                valid_acc, y_pred = sess.run([accuracy, y_p], feed_dict={self.img_pl: batch_imgs_valid,
-                                                                         self.label_pl: batch_labels_valid,
+            self.test_imgs_lab = Dataset.loadDataset(self.dataset_test)
+            testing_imgs_batch = self.ALLIterator(self.test_imgs_lab)
+            for step, elems in enumerate(testing_imgs_batch):
+                batch_imgs_test, batch_labels_test = elems
+                summary, test_acc, y_pred = sess.run([merged, accuracy, y_p], feed_dict={self.img_pl: batch_imgs_test,
+                                                                         self.label_pl: batch_labels_test,
                                                                          self.keep_prob: 1.0})
-                log.info("Validation accuracy = %.5f" % (valid_acc))
+
+
                 list_pred_total.extend(y_pred)
-                y_true = np.argmax(batch_labels_valid, 1)
+                y_true = np.argmax(batch_labels_test, 1)
                 list_true_total.extend(y_true)
+
+                log.info("testing accuracy = %.5f" % (test_acc))
+                test_writer.add_summary(summary, 1)
 
             # Classification Report
             print(metrics.classification_report(list_true_total, list_pred_total, target_names=target_names))
@@ -343,6 +573,7 @@ class ConvNet(object):
             log.info("Number of epochs %d" % (self.max_epochs))
             log.info("Standard Deviation %d" % (self.std_dev))
 
+    """
     def prediction(self):
         with tf.Session() as sess:
 
@@ -387,13 +618,13 @@ class ConvNet(object):
             log.info("Learning Rate %d" % self.learning_rate)
             log.info("Number of epochs %d" % self.max_epochs)
             log.info("Standard Deviation %d" % self.std_dev)
-
+    """
 
 ### MAIN ###
 def main():
     np.random.seed(7)
 
-    parser = argparse.ArgumentParser(description='A convolutional neural network for image recognition')
+    parser = argparse.ArgumentParser(description='A convolutional neural network for image classification')
     subparsers = parser.add_subparsers()
 
     training_args = [
@@ -448,12 +679,17 @@ def main():
             # TRAINING
             # create the object ConvNet for training
             conv_net = ConvNet(learning_rate=args.learning_rate, max_epochs=args.epochs, display_step=args.display_step,
-                               std_dev=args.std_dev, dataset_train="images_dataset.pkl_train",  dataset_valid="images_dataset.pkl_valid")
+                               std_dev=args.std_dev,
+                               dataset_train="images_dataset.pkl_train",
+                               dataset_valid="images_dataset.pkl_valid",
+                               dataset_test="images_dataset.pkl_test")
+
             # count total number of imgs in training
             train_img_count = Dataset.getNumImages(TRAIN_IMAGE_DIR)
             log.info("Training set num images = %d" % train_img_count)
             conv_net.training()
-        else:
+        """
+        else:#TODO THIS PART IS UNTESTED
             # PREDICTION
             # create the object ConvNet for test
             conv_net = ConvNet(dataset_test=args.dataset_test)
@@ -461,19 +697,30 @@ def main():
             test_img_count = Dataset.getNumImages(TEST_IMAGE_DIR)
             log.info("Test set num images = %d" % test_img_count)
             conv_net.prediction()
+        """
 
     # PREPROCESSING TRAINING
     elif args.which == 'preprocessing_training':
         if args.shuffle:
-            l = [i for i in Dataset.loadDataset('images_dataset.pkl')]
+            l = [i for i in Dataset.loadDataset('images_dataset.pkl_train')]
             np.random.shuffle(l)
-            Dataset.saveShuffle(l)
+            Dataset.saveShuffle(l, 'images_dataset.pkl_train')
+
+            l = [i for i in Dataset.loadDataset('images_dataset.pkl_valid')]
+            np.random.shuffle(l)
+            Dataset.saveShuffle(l, 'images_dataset.pkl_valid')
+
+            l = [i for i in Dataset.loadDataset('images_dataset.pkl_test')]
+            np.random.shuffle(l)
+            Dataset.saveShuffle(l, 'images_dataset.pkl_test')
         else:
             Dataset.saveDataset2(TRAIN_IMAGE_DIR, args.file)
 
+
+    #TODO THIS CODE IS UNTESTED
     # PREPROCESSING TEST
     elif args.which == 'preprocessing_test':
-        Dataset.saveDataset(TEST_IMAGE_DIR, args.test)
+        Dataset.saveDataset2(TEST_IMAGE_DIR, args.test)
 
 
 if __name__ == '__main__':

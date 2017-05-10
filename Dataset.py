@@ -11,7 +11,7 @@ from timeit import default_timer as timer
 
 IMG_SIZE = 250
 RE_IMG_SIZE = 96
-NUM_LABELS =  19
+NUM_LABELS =  5
 
 """
 Count total number of images
@@ -30,59 +30,6 @@ def getNumImages(image_dir):
 Return the dataset as images and labels
 """
 
-def convertDataset(image_dir):
-    THRESHOLD = 10  # TODO
-
-    # TODO create function for this
-    # Calculatge number of labels
-    global num_labels
-    num_labels = 0
-    for dirName in os.listdir(image_dir):
-        path = os.path.join(image_dir, dirName)
-        if (len(os.listdir(path)) < THRESHOLD):
-            continue
-        else:
-            num_labels += 1
-
-    print("SAVE THIS, NUM LABELS IS: %d" % num_labels)
-    global labels_dict
-    labels_dict = {}
-    label = np.eye(num_labels)  # Convert labels to one-hot-vector
-    i = 0
-
-    session = tf.Session()
-    init = tf.global_variables_initializer()
-    session.run(init)
-
-    log.info("Start processing images (Dataset.py) ")
-    start = timer()
-    for dirName in os.listdir(image_dir):
-        path = os.path.join(image_dir, dirName)
-        if (len(os.listdir(path)) < THRESHOLD):
-            continue
-
-        labels_dict[dirName] = i
-        label_i = label[i]
-        print("NOW AT %d/%d %fpercent" % (i + 1, num_labels, float(i + 1) / num_labels * 100))
-        i += 1
-        # log.info("Execution time of convLabels function = %.4f sec" % (end1-start1))
-
-        for img in os.listdir(path):
-            img_path = os.path.join(path, img)
-            if os.path.isfile(img_path) and img.endswith('jpg'):
-                img_bytes = tf.read_file(img_path)
-                img_u8 = tf.image.decode_jpeg(img_bytes, channels=3)
-                yield img_u8.eval(session=session), label_i
-    end = timer()
-    log.info("End processing images (Dataset.py) - Time = %.2f sec" % (end - start))
-
-
-def saveDataset(image_dir, file_path):
-    with gzip.open(file_path, 'wb') as file:
-        for img, label in convertDataset(image_dir):
-            pickle.dump((img, label), file)
-
-
 def split_list(a_list, ratio):
     index = int(len(a_list)*ratio)
     return a_list[:index], a_list[index:]
@@ -98,7 +45,7 @@ def convertDataset2(image_dir):
             #img_padded_or_cropped = tf.image.resize_image_with_crop_or_pad(img_u8, IMG_SIZE, IMG_SIZE)
             result_list.append((img_u8.eval(session=session), file_list_label,))
 
-    THRESHOLD = 40  # TODO
+    THRESHOLD = 80  # TODO
     dataset_train = []
     dataset_valid = []
     dataset_test = []
@@ -172,7 +119,8 @@ def loadDataset(file_path):
             except EOFError:
                 break
 
-def saveShuffle(l, file_path='images_shuffled.pkl'):
+def saveShuffle(l, file_path):
+    print("TEST")
     with gzip.open(file_path, 'wb') as file:
-        for img, label in l:
-            pickle.dump((img, label), file)
+        for i in l:
+            pickle.dump(i, file)
