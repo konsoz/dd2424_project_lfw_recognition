@@ -9,14 +9,13 @@ import pickle as pickle
 import gzip
 from timeit import default_timer as timer
 
-IMG_SIZE = 250
-RE_IMG_SIZE = 96
-NUM_LABELS =  5
+IMG_SIZE = 250 #original size of lfw dataset
+RE_IMG_SIZE = 96 #size for learning
+NUM_LABELS =  5 #number of individiuals to classify
 
 """
 Count total number of images
 """
-
 
 def getNumImages(image_dir):
     count = 0
@@ -34,18 +33,19 @@ def split_list(a_list, ratio):
     index = int(len(a_list)*ratio)
     return a_list[:index], a_list[index:]
 
-def convertDataset2(image_dir):
+def convertDataset(image_dir):
     def read_and_encode_files(file_list, file_list_label, result_list):
         for img in file_list:
             img_path = os.path.join(path, img)
+            #print(img)
             if  not os.path.isfile(img_path) and not img.endswith('jpg'):
                 continue
             img_bytes = tf.read_file(img_path)
             img_u8 = tf.image.decode_jpeg(img_bytes, channels=3)
-            #img_padded_or_cropped = tf.image.resize_image_with_crop_or_pad(img_u8, IMG_SIZE, IMG_SIZE)
-            result_list.append((img_u8.eval(session=session), file_list_label,))
+            img_padded_or_cropped = tf.image.resize_image_with_crop_or_pad(img_u8, RE_IMG_SIZE, RE_IMG_SIZE)
+            result_list.append((img_padded_or_cropped.eval(session=session), file_list_label,))
 
-    THRESHOLD = 80  # TODO
+    THRESHOLD = 80
     dataset_train = []
     dataset_valid = []
     dataset_test = []
@@ -98,8 +98,8 @@ def convertDataset2(image_dir):
     return dataset_train, dataset_valid, dataset_test
 
 
-def saveDataset2(image_dir, file_path):
-    dataset_train, dataset_valid, dataset_test = convertDataset2(image_dir)
+def saveDataset(image_dir, file_path):
+    dataset_train, dataset_valid, dataset_test = convertDataset(image_dir)
     with gzip.open(file_path+'_train', 'wb') as file:
         for img, label in dataset_train:
             pickle.dump((img, label), file)

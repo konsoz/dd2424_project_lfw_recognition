@@ -6,29 +6,29 @@ import numpy as np
 import logging as log
 # import timeit
 import argparse
+import re
 
 from sklearn import metrics
 
 from Dataset import IMG_SIZE, RE_IMG_SIZE
 
-TRAIN_IMAGE_DIR = os.getcwd() + '/data/lfw-deepfunneled'
-TEST_IMAGE_DIR = os.getcwd() + '/data/lfw-deepfunneled'  # TODO CREATE TEST SET?
-CKPT_DIR = 'ckpt_dir'
-MODEL_CKPT = 'ckpt_dir/model.cktp'
+TRAIN_IMAGE_DIR = os.getcwd() + '/data/lfw'
+TEST_IMAGE_DIR = os.getcwd() + '/data/lfw'
+CKPT_DIR = 'ckpt_dir_baseline_lfw_additional'
+MODEL_CKPT = 'ckpt_dir_baseline_lfw_additional/model.cktp'
+
 
 ### Parameters for Logistic Regression ###
 BATCH_SIZE = 32
 
 ### Network Parameters ###
 n_channels = 3
-dropout = 0.8  # Dropout, probability to keep units
 
-"""FROM CIFAR GUIDE"""
+"""CODE SNIPPET FROM CIFAR GUIDE"""
 # If a model is trained with multiple GPUs, prefix all Op names with tower_name
 # to differentiate the operations. Note that this prefix is removed from the
 # names of the summaries when visualizing a model.
 TOWER_NAME = 'tower'
-import re
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -129,8 +129,7 @@ def _variable_with_weight_decay(name, shape, stddev, wd):
         tf.add_to_collection('losses', weight_decay)
     return var
 
-
-"""FROM CIFAR GUIDE"""
+"""CODE SNIPPET FROM CIFAR GUIDE"""
 
 
 class ConvNet(object):
@@ -154,7 +153,7 @@ class ConvNet(object):
 
 
         # Graph input
-        self.img_pl = tf.placeholder(tf.float32, [None, IMG_SIZE, IMG_SIZE, n_channels])
+        self.img_pl = tf.placeholder(tf.float32, [None, RE_IMG_SIZE, RE_IMG_SIZE, n_channels])
         self.label_pl = tf.placeholder(tf.float32, [None, Dataset.NUM_LABELS])
         self.keep_prob = tf.placeholder(tf.float32)  # dropout (keep probability)
 
@@ -202,13 +201,10 @@ class ConvNet(object):
     def noLNorm_model(self, _images_u8, _dropout):
 
         # Reshape input image batch
-        img_padded_or_cropped = tf.image.resize_images(_images_u8, [RE_IMG_SIZE, RE_IMG_SIZE])
-        _images_f32 = tf.image.convert_image_dtype(img_padded_or_cropped, tf.float32)
+        #img_padded_or_cropped = tf.image.resize_images(_images_u8, [RE_IMG_SIZE, RE_IMG_SIZE])
+        _images_f32 = tf.image.convert_image_dtype(_images_u8, tf.float32)
 
         _X = tf.reshape(_images_f32, shape=[-1, RE_IMG_SIZE, RE_IMG_SIZE, 3])
-
-        # Batch normalization on images, TODO add fc layer after this?
-        # b_norm = tf.contrib.layers.batch_norm(_X, center=True, scale=True, is_training=True, scope='bn')
 
         # Convolution Layer 1
         with tf.variable_scope('conv1') as scope:
@@ -284,13 +280,10 @@ class ConvNet(object):
     def noConv2_model(self, _images_u8, _dropout):
 
         # Reshape input image batch
-        img_padded_or_cropped = tf.image.resize_images(_images_u8, [RE_IMG_SIZE, RE_IMG_SIZE])
-        _images_f32 = tf.image.convert_image_dtype(img_padded_or_cropped, tf.float32)
+        #img_padded_or_cropped = tf.image.resize_images(_images_u8, [RE_IMG_SIZE, RE_IMG_SIZE])
+        _images_f32 = tf.image.convert_image_dtype(_images_u8, tf.float32)
 
         _X = tf.reshape(_images_f32, shape=[-1, RE_IMG_SIZE, RE_IMG_SIZE, 3])
-
-        # Batch normalization on images, TODO add fc layer after this?
-        # b_norm = tf.contrib.layers.batch_norm(_X, center=True, scale=True, is_training=True, scope='bn')
 
         # Convolution Layer 1
         with tf.variable_scope('conv1') as scope:
@@ -354,13 +347,10 @@ class ConvNet(object):
     def baseline_model(self, _images_u8, _dropout):
 
         # Reshape input image batch
-        img_padded_or_cropped = tf.image.resize_images(_images_u8, [RE_IMG_SIZE, RE_IMG_SIZE])
-        _images_f32 = tf.image.convert_image_dtype(img_padded_or_cropped, tf.float32)
+        #img_padded_or_cropped = tf.image.resize_images(_images_u8, [RE_IMG_SIZE, RE_IMG_SIZE])
+        _images_f32 = tf.image.convert_image_dtype(_images_u8, tf.float32)
 
         _X = tf.reshape(_images_f32, shape=[-1, RE_IMG_SIZE, RE_IMG_SIZE, 3])
-
-        # Batch normalization on images, TODO add fc layer after this?
-        # b_norm = tf.contrib.layers.batch_norm(_X, center=True, scale=True, is_training=True, scope='bn')
 
         # Convolution Layer 1
         with tf.variable_scope('conv1') as scope:
@@ -446,7 +436,7 @@ class ConvNet(object):
 
             ############################# Construct model: prepare logits, loss and optimizer #############################
 
-            # logits: unnormalized log probabilities
+            # logits: Here there are three different models to use
             #logits = self.noLNorm_model(self.img_pl, self.keep_prob)
             logits = self.noConv2_model(self.img_pl, self.keep_prob)
             #logits = self.baseline_model(self.img_pl, self.keep_prob)
@@ -471,7 +461,7 @@ class ConvNet(object):
             init = tf.global_variables_initializer()
             # Run the Op to initialize the variables.
             sess.run(init)
-            #summary_writer = tf.summary.FileWriter(CKPT_DIR, graph=sess.graph)
+
             # Merge all the summaries and write them out
             merged = tf.summary.merge_all()
             train_writer = tf.summary.FileWriter(CKPT_DIR + '/train',
@@ -493,7 +483,6 @@ class ConvNet(object):
 
                 # Loop over all batches
                 for step, elems in enumerate(self.BatchIterator(self.train_imgs_lab, BATCH_SIZE)):
-                    #print("\nstep = %d" % step)
                     log.info('step %s' % step)
                     ### from iterator return batch lists ###
                     batch_imgs_train, batch_labels_train = elems
@@ -502,12 +491,8 @@ class ConvNet(object):
                                                     self.label_pl: batch_labels_train,
                                                     self.keep_prob: 1.0})
 
-                    #train_writer.add_summary(summary, epoch * num_batches + step)
-
                     print("Training Accuracy = " + "{:.5f}".format(train_acc))
                     print("Training Loss = " + "{:.6f}".format(train_loss))
-                    #log.info("Training Accuracy = " + "{:.5f}".format(train_acc))
-                    #log.info("Training Loss = " + "{:.6f}".format(train_loss))
 
                 y_p = tf.argmax(logits, 1)
 
@@ -573,56 +558,10 @@ class ConvNet(object):
             log.info("Number of epochs %d" % (self.max_epochs))
             log.info("Standard Deviation %d" % (self.std_dev))
 
-    """
-    def prediction(self):
-        with tf.Session() as sess:
-
-            ### Construct model
-            pred = self.simple_model(self.img_pl, self.weights, self.biases, self.keep_prob)
-
-            ### Restore model
-            ckpt = tf.train.get_checkpoint_state("ckpt_dir")
-            if (ckpt):
-                self.saver.restore(sess, MODEL_CKPT)
-                print("Model restored")
-            else:
-                print("No model checkpoint found to restore - ERROR")
-                return
-
-            ############################################### Metrics ##############################################
-
-            y_p = tf.argmax(pred, 1)  # the value predicted
-
-            target_names = ['class 0', 'class 1', 'class 2']
-            list_pred_total = []
-            list_true_total = []
-
-            # Accuracy Precision Recall F1-score by TEST IMAGES
-            for step, elems, _ in enumerate(self.BatchIterator(self.test_imgs_lab, BATCH_SIZE)):
-                batch_imgs_test, batch_labels_test = elems
-                print(batch_imgs_test[0])
-                print(batch_labels_test[0])
-
-                y_pred = sess.run(y_p, feed_dict={self.img_pl: batch_imgs_test, self.keep_prob: 1.0})
-                # print(len(y_pred))
-                list_pred_total.extend(y_pred)
-                y_true = np.argmax(batch_labels_test, 1)
-                # print(len(y_true))
-                list_true_total.extend(y_true)
-
-            # Classification Report
-            print(metrics.classification_report(list_true_total, list_pred_total, target_names=target_names))
-            log.info(metrics.classification_report(list_true_total, list_pred_total, target_names=target_names))
-
-            # Network Input Values
-            log.info("Learning Rate %d" % self.learning_rate)
-            log.info("Number of epochs %d" % self.max_epochs)
-            log.info("Standard Deviation %d" % self.std_dev)
-    """
 
 ### MAIN ###
 def main():
-    np.random.seed(7)
+    #np.random.seed(7)
 
     parser = argparse.ArgumentParser(description='A convolutional neural network for image classification')
     subparsers = parser.add_subparsers()
@@ -633,12 +572,9 @@ def main():
         (['-ds', '--display-step'], {'help': 'display step', 'type': int, 'default': 10}),
         (['-sd', '--std-dev'], {'help': 'std-dev', 'type': float, 'default': 1.0}),
         (['-dtr', '--dataset_training'],
-         {'help': 'dataset training file', 'type': str, 'default': 'images_shuffled.pkl'})
+        {'help': 'dataset training file', 'type': str, 'default': 'images_shuffled.pkl'})
     ]
 
-    test_args = [
-        (['-dts', '--dataset_test'], {'help': 'dataset test file', 'type': str, 'default': 'images_test_dataset.pkl'})
-    ]
 
     # parser train
     parser_train = subparsers.add_parser('train')
@@ -647,22 +583,11 @@ def main():
         parser_train.add_argument(*arg[0], **arg[1])
 
     # parser preprocessing training data
-    parser_preprocess = subparsers.add_parser('preprocessing_training')
-    parser_preprocess.set_defaults(which='preprocessing_training')
+    parser_preprocess = subparsers.add_parser('preprocessing')
+    parser_preprocess.set_defaults(which='preprocessing')
     parser_preprocess.add_argument('-f', '--file', help='output training file', type=str, default='images_dataset.pkl')
     parser_preprocess.add_argument('-s', '--shuffle', help='shuffle training dataset', action='store_true')
     parser_preprocess.set_defaults(shuffle=False)
-
-    # parser preprocessing test data
-    parser_preprocess = subparsers.add_parser('preprocessing_test')
-    parser_preprocess.set_defaults(which='preprocessing_test')
-    parser_preprocess.add_argument('-t', '--test', help='output test file', type=str, default='images_test_dataset.pkl')
-
-    # parser predict
-    parser_predict = subparsers.add_parser('predict')
-    parser_predict.set_defaults(which='predict')
-    for arg in test_args:
-        parser_predict.add_argument(*arg[0], **arg[1])
 
     args = parser.parse_args()
 
@@ -688,19 +613,9 @@ def main():
             train_img_count = Dataset.getNumImages(TRAIN_IMAGE_DIR)
             log.info("Training set num images = %d" % train_img_count)
             conv_net.training()
-        """
-        else:#TODO THIS PART IS UNTESTED
-            # PREDICTION
-            # create the object ConvNet for test
-            conv_net = ConvNet(dataset_test=args.dataset_test)
-            # count total number of imgs in test
-            test_img_count = Dataset.getNumImages(TEST_IMAGE_DIR)
-            log.info("Test set num images = %d" % test_img_count)
-            conv_net.prediction()
-        """
 
     # PREPROCESSING TRAINING
-    elif args.which == 'preprocessing_training':
+    elif args.which == 'preprocessing':
         if args.shuffle:
             l = [i for i in Dataset.loadDataset('images_dataset.pkl_train')]
             np.random.shuffle(l)
@@ -714,13 +629,7 @@ def main():
             np.random.shuffle(l)
             Dataset.saveShuffle(l, 'images_dataset.pkl_test')
         else:
-            Dataset.saveDataset2(TRAIN_IMAGE_DIR, args.file)
-
-
-    #TODO THIS CODE IS UNTESTED
-    # PREPROCESSING TEST
-    elif args.which == 'preprocessing_test':
-        Dataset.saveDataset2(TEST_IMAGE_DIR, args.test)
+            Dataset.saveDataset(TRAIN_IMAGE_DIR, args.file)
 
 
 if __name__ == '__main__':
